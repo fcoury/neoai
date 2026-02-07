@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AiChatController } from "../../hooks/useAiChat";
+import type { NvimStartLaunchResult } from "../../types/nvim";
 import { ContextBadge } from "./ContextBadge";
 import { ChatMessage } from "./ChatMessage";
 import { ChatInput } from "./ChatInput";
@@ -11,10 +12,11 @@ const NVIM_CONNECT_TIMEOUT_MS = 8000;
 
 type Props = {
   terminalId: string | null;
+  terminalWorkingDirectory?: string | null;
   ai: AiChatController;
 };
 
-export function AiChat({ terminalId, ai }: Props) {
+export function AiChat({ terminalId, terminalWorkingDirectory, ai }: Props) {
   const {
     messages,
     isStreaming,
@@ -37,6 +39,8 @@ export function AiChat({ terminalId, ai }: Props) {
   const [connectInput, setConnectInput] = useState("");
   const [showManualConnect, setShowManualConnect] = useState(false);
   const [isStartingNvim, setIsStartingNvim] = useState(false);
+  const [isStartingWithoutTmux, setIsStartingWithoutTmux] = useState(false);
+  const [tmuxFallbackPrompt, setTmuxFallbackPrompt] = useState<string | null>(null);
   const [isReinjectingKeymaps, setIsReinjectingKeymaps] = useState(false);
   const [agentError, setAgentError] = useState<string | null>(null);
   const [keymapError, setKeymapError] = useState<string | null>(null);
@@ -53,6 +57,8 @@ export function AiChat({ terminalId, ai }: Props) {
     // Cancel any in-flight start attempt when switching terminals.
     startAttemptRef.current += 1;
     setIsStartingNvim(false);
+    setIsStartingWithoutTmux(false);
+    setTmuxFallbackPrompt(null);
   }, [terminalId]);
 
   const handleConnect = useCallback(async () => {
@@ -66,20 +72,8 @@ export function AiChat({ terminalId, ai }: Props) {
     }
   }, [connectInput, nvim, appendSystemMessage]);
 
-  const handleStartNvim = useCallback(async () => {
-    if (!terminalId || isStartingNvim) return;
-    const attemptId = startAttemptRef.current + 1;
-    startAttemptRef.current = attemptId;
-    setIsStartingNvim(true);
-    try {
-      const socketPath = await invoke<string>("get_socket_path", {
-        terminalId,
-      });
-      await invoke("ghostty_write_text", {
-        id: terminalId,
-        text: `nvim --listen ${socketPath}\n`,
-      });
-
+  const waitForNvimConnection = useCallback(
+    async (attemptId: number, socketPath: string, successMessage: string) => {
       const deadline = Date.now() + NVIM_CONNECT_TIMEOUT_MS;
       let lastError: unknown = null;
 
@@ -90,7 +84,7 @@ export function AiChat({ terminalId, ai }: Props) {
 
         try {
           await nvim.connect(socketPath);
-          appendSystemMessage("Started Neovim and connected to socket.");
+          appendSystemMessage(successMessage);
           return;
         } catch (e) {
           lastError = e;
@@ -100,18 +94,88 @@ export function AiChat({ terminalId, ai }: Props) {
 
       const reason = lastError ? String(lastError) : "Timed out waiting for Neovim to be ready";
       throw new Error(reason);
-    } catch (e) {
-      if (startAttemptRef.current !== attemptId) {
-        return;
+    },
+    [nvim, appendSystemMessage]
+  );
+
+  const startNvim = useCallback(
+    async (allowFallback: boolean) => {
+      if (!terminalId || isStartingNvim) return;
+      const attemptId = startAttemptRef.current + 1;
+      startAttemptRef.current = attemptId;
+      setIsStartingNvim(true);
+      try {
+        const socketPath = await invoke<string>("get_socket_path", {
+          terminalId,
+        });
+        const launch = await invoke<NvimStartLaunchResult>("nvim_start_in_tmux", {
+          terminalId,
+          socketPath,
+          allowFallback,
+          cwd: terminalWorkingDirectory ?? null,
+        });
+
+        if (startAttemptRef.current !== attemptId) {
+          return;
+        }
+
+        if (launch.launchMode === "tmuxUnavailable") {
+          setTmuxFallbackPrompt(launch.message);
+          appendSystemMessage(launch.message, "status-note");
+          return;
+        }
+
+        setTmuxFallbackPrompt(null);
+        await waitForNvimConnection(
+          attemptId,
+          socketPath,
+          launch.launchMode === "tmux"
+            ? "Started Neovim in tmux and connected to socket."
+            : "Started Neovim and connected to socket."
+        );
+      } catch (e) {
+        if (startAttemptRef.current !== attemptId) {
+          return;
+        }
+        console.error("Failed to start neovim:", e);
+        appendSystemMessage(`Failed to start Neovim: ${String(e)}`, "status-note");
+      } finally {
+        if (startAttemptRef.current === attemptId) {
+          setIsStartingNvim(false);
+        }
       }
-      console.error("Failed to start neovim:", e);
-      appendSystemMessage(`Failed to start Neovim: ${String(e)}`, "status-note");
+    },
+    [
+      terminalId,
+      terminalWorkingDirectory,
+      isStartingNvim,
+      appendSystemMessage,
+      waitForNvimConnection,
+    ]
+  );
+
+  const handleStartNvim = useCallback(() => {
+    void startNvim(false);
+  }, [startNvim]);
+
+  const handleStartWithoutTmux = useCallback(async () => {
+    if (!terminalId || isStartingNvim || isStartingWithoutTmux) return;
+    setIsStartingWithoutTmux(true);
+    try {
+      await invoke("tmux_enable_for_terminal", { terminalId, enabled: false });
+      appendSystemMessage("Continuing without tmux for this terminal.");
+      await startNvim(true);
     } finally {
-      if (startAttemptRef.current === attemptId) {
-        setIsStartingNvim(false);
-      }
+      setIsStartingWithoutTmux(false);
     }
-  }, [terminalId, isStartingNvim, nvim, appendSystemMessage]);
+  }, [terminalId, isStartingNvim, isStartingWithoutTmux, appendSystemMessage, startNvim]);
+
+  const handleRetryTmux = useCallback(async () => {
+    if (!terminalId || isStartingNvim) return;
+    await invoke("tmux_enable_for_terminal", { terminalId, enabled: true });
+    setTmuxFallbackPrompt(null);
+    void startNvim(false);
+  }, [terminalId, isStartingNvim, startNvim]);
 
   const ensureAgentSession = useCallback(async (source: "manual" | "auto") => {
     if (!terminalId) return;
@@ -182,6 +246,8 @@ export function AiChat({ terminalId, ai }: Props) {
 
   const currentAction = permissionRequest
     ? { type: "permission" as const }
+    : tmuxFallbackPrompt
+      ? { type: "tmuxFallback" as const }
     : !isConnected
       ? { type: "connect" as const }
       : hasKeymapIssue
@@ -403,6 +469,32 @@ export function AiChat({ terminalId, ai }: Props) {
             {nvim.lastError && (
               <p className="ai-chat__agent-error">{nvim.lastError}</p>
             )}
+          </div>
+        )}
+
+        {currentAction?.type === "tmuxFallback" && (
+          <div className="ai-chat__connect-prompt ai-chat__connect-prompt--warning">
+            <p>{tmuxFallbackPrompt}</p>
+            <button
+              type="button"
+              className="ai-chat__connect-btn ai-chat__connect-btn--primary"
+              onClick={handleStartWithoutTmux}
+              disabled={!terminalId || isStartingNvim || isStartingWithoutTmux}
+            >
+              {isStartingNvim || isStartingWithoutTmux
+                ? "Starting without tmux..."
+                : "Continue Without tmux"}
+            </button>
+            <button
+              type="button"
+              className="ai-chat__connect-link"
+              onClick={() => {
+                void handleRetryTmux();
+              }}
+              disabled={!terminalId || isStartingNvim}
+            >
+              Retry with tmux
+            </button>
           </div>
         )}
 

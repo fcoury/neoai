@@ -158,7 +158,13 @@ function App() {
               }}
             />
           ) : (
-            <AiChat terminalId={activeTerminalId} ai={aiChat} />
+            <AiChat
+              terminalId={activeTerminalId}
+              terminalWorkingDirectory={
+                activeTerminalId ? terminals.get(activeTerminalId)?.path ?? null : null
+              }
+              ai={aiChat}
+            />
           )}
         </div>
         <div

@@ -116,3 +116,18 @@ export interface NvimCursorFollowEvent {
   line: number;
   source: string;
 }
+
+export interface TmuxStatus {
+  terminalId: string;
+  available: boolean;
+  enabled: boolean;
+  mode: "tmux" | "fallback";
+  sessionName: string;
+  error?: string;
+}
+
+export interface NvimStartLaunchResult {
+  launchMode: "tmux" | "direct" | "tmuxUnavailable";
+  sessionName?: string;
+  message: string;
+}
