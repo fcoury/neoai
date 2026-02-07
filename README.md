@@ -39,6 +39,23 @@ If `codex-acp` is missing, NeoAI downloads a managed release from `zed-industrie
 - macOS install root: `~/.neoai/agents/codex-acp/<version>/`
 - Other platforms: app-local data dir under `agents/codex-acp/<version>/`
 
+## Tmux Command Placement
+
+NeoAI creates `<app-folder>/config.toml` on first launch to control tmux strategy for ACP command execution.
+
+- macOS app folder: `~/.neoai`
+- Other platforms: app-local data directory
+
+Default runtime fallback is `window`, but the generated config starts with:
+
+```toml
+tmux_command_mode = "split"
+allow_agent_tmux_override = true
+agent_tmux_override_whitelist = ["split", "window", "hidden"]
+```
+
+The agent can request a mode using ACP request metadata key `_meta.neoai_tmux_mode`, and NeoAI applies it only if it matches the whitelist.
+
 ## Common Commands
 
 - `just install`
