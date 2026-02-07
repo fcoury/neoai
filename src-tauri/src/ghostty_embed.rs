@@ -4,7 +4,10 @@ use std::{
     ffi::CString,
     os::raw::{c_char, c_void},
     ptr::{self, NonNull},
-    sync::{atomic::{AtomicBool, Ordering}, OnceLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        OnceLock,
+    },
 };
 
 use serde::{Deserialize, Serialize};
@@ -13,9 +16,12 @@ use serde::{Deserialize, Serialize};
 use {
     block2::RcBlock,
     ghostty_sys::*,
-    objc2::{declare_class, msg_send_id, mutability, ClassType, DeclaredClass},
     objc2::rc::Retained,
-    objc2_app_kit::{NSEvent, NSEventModifierFlags, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindowOrderingMode},
+    objc2::{declare_class, msg_send_id, mutability, ClassType, DeclaredClass},
+    objc2_app_kit::{
+        NSEvent, NSEventModifierFlags, NSTrackingArea, NSTrackingAreaOptions, NSView,
+        NSWindowOrderingMode,
+    },
     objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSTimer},
     raw_window_handle::{HasWindowHandle, RawWindowHandle},
     tauri::{Emitter, Manager, Window},
@@ -291,7 +297,13 @@ struct GhosttyInstance {
 
 #[cfg(target_os = "macos")]
 impl GhosttyInstance {
-    fn new(window: &Window, id: String, app_handle: tauri::AppHandle, rect: GhosttyRect, options: GhosttyOptions) -> Result<Box<Self>, String> {
+    fn new(
+        window: &Window,
+        id: String,
+        app_handle: tauri::AppHandle,
+        rect: GhosttyRect,
+        options: GhosttyOptions,
+    ) -> Result<Box<Self>, String> {
         let (content_view, webview_view) = content_and_webview(window)?;
         let mtm = MainThreadMarker::new().ok_or("not on main thread")?;
 
@@ -371,7 +383,8 @@ impl GhosttyInstance {
 
         let mut surface_config = unsafe { ghostty_surface_config_new() };
         surface_config.platform_tag = ghostty_platform_e_GHOSTTY_PLATFORM_MACOS;
-        surface_config.platform.macos.nsview = Retained::as_ptr(&instance.view) as *const _ as *mut _;
+        surface_config.platform.macos.nsview =
+            Retained::as_ptr(&instance.view) as *const _ as *mut _;
         surface_config.userdata = instance_ptr as *mut _;
         surface_config.scale_factor = backing_scale_factor(&webview_view);
         surface_config.font_size = options.font_size.unwrap_or(0.0);
@@ -486,10 +499,13 @@ impl GhosttyInstance {
                 let responder = self.view.as_super().as_super();
                 window.makeFirstResponder(Some(responder));
             }
-            let _ = self.app_handle.emit("ghostty-focus", &GhosttyFocusEvent {
-                terminal_id: self.id.clone(),
-                focused: true,
-            });
+            let _ = self.app_handle.emit(
+                "ghostty-focus",
+                &GhosttyFocusEvent {
+                    terminal_id: self.id.clone(),
+                    focused: true,
+                },
+            );
             return;
         }
 
@@ -501,10 +517,13 @@ impl GhosttyInstance {
             ghostty_surface_set_focus(self.ghostty_surface, false);
             ghostty_app_set_focus(self.ghostty_app, false);
         }
-        let _ = self.app_handle.emit("ghostty-focus", &GhosttyFocusEvent {
-            terminal_id: self.id.clone(),
-            focused: false,
-        });
+        let _ = self.app_handle.emit(
+            "ghostty-focus",
+            &GhosttyFocusEvent {
+                terminal_id: self.id.clone(),
+                focused: false,
+            },
+        );
     }
 
     fn handle_key(&mut self, event: &NSEvent, action: ghostty_input_action_e) {
@@ -834,10 +853,12 @@ fn rect_to_frame(content_view: &NSView, webview_view: &NSView, rect: GhosttyRect
         NSPoint::new(webview_bounds.origin.x + x, y_in_webview),
         NSSize::new(width, height),
     );
-    let rect_in_window: NSRect =
-        unsafe { objc2::msg_send![webview_view, convertRect: rect_in_webview, toView: ptr::null::<NSView>()] };
-    let frame: NSRect =
-        unsafe { objc2::msg_send![content_view, convertRect: rect_in_window, fromView: ptr::null::<NSView>()] };
+    let rect_in_window: NSRect = unsafe {
+        objc2::msg_send![webview_view, convertRect: rect_in_webview, toView: ptr::null::<NSView>()]
+    };
+    let frame: NSRect = unsafe {
+        objc2::msg_send![content_view, convertRect: rect_in_window, fromView: ptr::null::<NSView>()]
+    };
 
     frame
 }
@@ -928,5 +949,8 @@ unsafe extern "C" fn runtime_close_surface_cb(userdata: *mut c_void, _confirm: b
         return;
     }
     let instance = unsafe { &mut *(userdata as *mut GhosttyInstance) };
-    instance.flags.close_requested.store(true, Ordering::Release);
+    instance
+        .flags
+        .close_requested
+        .store(true, Ordering::Release);
 }

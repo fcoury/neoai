@@ -32,6 +32,8 @@ export interface BufferEdit {
   startLine: number;
   endLine: number;
   newLines: string[];
+  filePath?: string;
+  targetLine?: number;
 }
 
 /** Simple status for UI display. The backend ConnectionStatus enum is richer
@@ -106,4 +108,11 @@ export interface NvimBridgeDebugEvent {
   terminalId: string;
   stage: string;
   detail?: string;
+}
+
+export interface NvimCursorFollowEvent {
+  terminalId: string;
+  filePath: string;
+  line: number;
+  source: string;
 }

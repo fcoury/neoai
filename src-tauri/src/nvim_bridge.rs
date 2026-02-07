@@ -168,6 +168,10 @@ pub struct BufferEdit {
     pub start_line: i64,
     pub end_line: i64,
     pub new_lines: Vec<String>,
+    #[serde(default)]
+    pub file_path: Option<String>,
+    #[serde(default)]
+    pub target_line: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -191,7 +195,11 @@ pub struct NvimHealth {
 // -- Neovim action types (sent from Neovim → Tauri via rpcnotify) --
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "action")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "action"
+)]
 pub enum NvimAction {
     FixDiagnostic {
         file_path: String,
@@ -253,6 +261,23 @@ pub struct NvimBridgeDebugEvent {
     pub detail: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct NvimCursorFollowEvent {
+    pub terminal_id: String,
+    pub file_path: String,
+    pub line: i64,
+    pub source: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LuaBufferEdit<'a> {
+    start_line: i64,
+    end_line: i64,
+    new_lines: &'a [String],
+}
+
 // -- Helpers --
 
 fn emit_bridge_debug(
@@ -267,6 +292,22 @@ fn emit_bridge_debug(
         detail,
     };
     let _ = app_handle.emit("nvim-bridge-debug", event);
+}
+
+fn emit_cursor_follow(
+    app_handle: &tauri::AppHandle,
+    terminal_id: &str,
+    file_path: &str,
+    line: i64,
+    source: &str,
+) {
+    let event = NvimCursorFollowEvent {
+        terminal_id: terminal_id.to_string(),
+        file_path: file_path.to_string(),
+        line,
+        source: source.to_string(),
+    };
+    let _ = app_handle.emit("nvim-cursor-follow", event);
 }
 
 fn parse_nvim_action(value: Value) -> Result<NvimAction, String> {
@@ -302,6 +343,132 @@ fn apply_line_window(content: &str, line: Option<u32>, limit: Option<u32>) -> St
         None => lines.len(),
     };
     lines[start..end].join("\n")
+}
+
+fn parse_cursor_follow_payload(
+    payload: serde_json::Value,
+) -> Result<(String, i64, Option<i64>), String> {
+    if !payload["ok"].as_bool().unwrap_or(false) {
+        let err = payload["error"]
+            .as_str()
+            .unwrap_or("cursor follow operation failed");
+        return Err(err.to_string());
+    }
+
+    let file_path = payload["filePath"]
+        .as_str()
+        .ok_or_else(|| "cursor follow payload missing filePath".to_string())?
+        .to_string();
+    let line = payload["line"]
+        .as_i64()
+        .ok_or_else(|| "cursor follow payload missing line".to_string())?;
+    let changed_line = payload["changedLine"].as_i64();
+
+    Ok((file_path, line, changed_line))
+}
+
+fn group_edits_by_file(mut edits: Vec<BufferEdit>) -> Vec<(Option<String>, Vec<BufferEdit>)> {
+    let mut grouped: Vec<(Option<String>, Vec<BufferEdit>)> = Vec::new();
+    for edit in edits.drain(..) {
+        let key = edit.file_path.clone();
+        if let Some((_, bucket)) = grouped.iter_mut().find(|(existing, _)| *existing == key) {
+            bucket.push(edit);
+        } else {
+            grouped.push((key, vec![edit]));
+        }
+    }
+    grouped
+}
+
+fn target_line_for_group(edits: &[BufferEdit]) -> Option<i64> {
+    edits
+        .iter()
+        .find_map(|edit| edit.target_line)
+        .or_else(|| edits.iter().map(|edit| edit.start_line + 1).min())
+}
+
+async fn apply_edit_group_with_cursor_follow(
+    app_handle: &tauri::AppHandle,
+    terminal_id: &str,
+    nvim: &Neovim<Writer>,
+    file_path: Option<&str>,
+    source: &str,
+    edits: Vec<BufferEdit>,
+) -> Result<(), String> {
+    if edits.is_empty() {
+        emit_bridge_debug(
+            app_handle,
+            terminal_id,
+            "cursor_follow.skipped",
+            Some(format!("source={} reason=no_edits", source)),
+        );
+        return Ok(());
+    }
+
+    let target_line_hint = target_line_for_group(&edits);
+    let mut sorted_edits = edits;
+    sorted_edits.sort_by(|a, b| b.start_line.cmp(&a.start_line));
+
+    let lua_edits: Vec<LuaBufferEdit<'_>> = sorted_edits
+        .iter()
+        .map(|edit| LuaBufferEdit {
+            start_line: edit.start_line,
+            end_line: edit.end_line,
+            new_lines: &edit.new_lines,
+        })
+        .collect();
+    let edits_json = serde_json::to_string(&lua_edits).map_err(|e| e.to_string())?;
+    let path_value = match file_path {
+        Some(path) => Value::from(path.to_string()),
+        None => Value::Nil,
+    };
+    let line_value = match target_line_hint {
+        Some(line) => Value::from(line),
+        None => Value::Nil,
+    };
+
+    emit_bridge_debug(
+        app_handle,
+        terminal_id,
+        "cursor_follow.target_resolved",
+        Some(format!(
+            "source={} file={} line_hint={}",
+            source,
+            file_path.unwrap_or("<current-buffer>"),
+            target_line_hint
+                .map(|line| line.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        )),
+    );
+
+    let result = nvim
+        .exec_lua(
+            build_apply_edits_lua(),
+            vec![path_value, Value::from(edits_json), line_value],
+        )
+        .await
+        .map_err(|e| format!("Neovim apply_edits lua failed: {}", e))?;
+    let payload = parse_lua_json(result)?;
+    let (resolved_file_path, resolved_line, _) = parse_cursor_follow_payload(payload)?;
+
+    emit_cursor_follow(
+        app_handle,
+        terminal_id,
+        &resolved_file_path,
+        resolved_line,
+        source,
+    );
+    emit_bridge_debug(
+        app_handle,
+        terminal_id,
+        "cursor_follow.applied",
+        Some(format!(
+            "source={} file={} line={}",
+            source, resolved_file_path, resolved_line
+        )),
+    );
+
+    Ok(())
 }
 
 fn extract_channel_id(api_info: &[Value]) -> Result<i64, String> {
@@ -597,6 +764,10 @@ if type(content) ~= "string" then
 end
 
 local path = vim.fn.fnamemodify(input_path, ":p")
+local current_buf = vim.api.nvim_get_current_buf()
+local current_path = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(current_buf), ":p")
+local current_cursor = vim.api.nvim_win_get_cursor(0)
+local same_file = current_path == path
 local bufnr = vim.fn.bufnr(path)
 if bufnr == -1 then
     bufnr = vim.fn.bufadd(path)
@@ -612,12 +783,31 @@ if not vim.api.nvim_buf_is_valid(bufnr) then
     return vim.json.encode({ ok = false, error = "invalid buffer for file" })
 end
 
+local old_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 local lines = vim.split(content, "\n", { plain = true })
 if #lines > 0 and lines[#lines] == "" then
     table.remove(lines, #lines)
 end
 if #lines == 0 then
     lines = { "" }
+end
+
+local changed_line = nil
+local max_len = math.max(#old_lines, #lines)
+for i = 1, max_len do
+    if old_lines[i] ~= lines[i] then
+        changed_line = i
+        break
+    end
+end
+
+local target_line = changed_line
+if not target_line then
+    if same_file then
+        target_line = current_cursor[1]
+    else
+        target_line = 1
+    end
 end
 
 vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
@@ -635,7 +825,152 @@ if not ok then
     })
 end
 
-return vim.json.encode({ ok = true })
+local winid = vim.fn.bufwinid(bufnr)
+if winid ~= -1 then
+    vim.api.nvim_set_current_win(winid)
+else
+    local ok_set = pcall(vim.api.nvim_win_set_buf, 0, bufnr)
+    if not ok_set then
+        local ok_edit, edit_err = pcall(function()
+            vim.cmd("silent keepalt edit " .. vim.fn.fnameescape(path))
+        end)
+        if not ok_edit then
+            return vim.json.encode({
+                ok = false,
+                error = tostring(edit_err),
+            })
+        end
+        bufnr = vim.api.nvim_get_current_buf()
+    end
+end
+
+local line_count = vim.api.nvim_buf_line_count(bufnr)
+if line_count < 1 then
+    line_count = 1
+end
+if target_line < 1 then
+    target_line = 1
+end
+if target_line > line_count then
+    target_line = line_count
+end
+
+vim.api.nvim_win_set_cursor(0, { target_line, 0 })
+pcall(vim.cmd, "normal! zz")
+
+return vim.json.encode({
+    ok = true,
+    filePath = path,
+    line = target_line,
+    changedLine = changed_line,
+})
+"#
+}
+
+fn build_apply_edits_lua() -> &'static str {
+    r#"
+local input_path, edits_json, target_line_hint = ...
+if type(edits_json) ~= "string" then
+    return vim.json.encode({ ok = false, error = "missing edits payload" })
+end
+
+local ok_decode, edits = pcall(vim.json.decode, edits_json)
+if not ok_decode or type(edits) ~= "table" then
+    return vim.json.encode({ ok = false, error = "invalid edits payload" })
+end
+if #edits == 0 then
+    return vim.json.encode({ ok = false, error = "empty edits payload" })
+end
+
+local current_buf = vim.api.nvim_get_current_buf()
+local current_path = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(current_buf), ":p")
+local current_cursor = vim.api.nvim_win_get_cursor(0)
+local path = nil
+local bufnr = nil
+local same_file = false
+
+if type(input_path) == "string" and input_path ~= "" then
+    path = vim.fn.fnamemodify(input_path, ":p")
+    same_file = current_path == path
+    bufnr = vim.fn.bufnr(path)
+    if bufnr == -1 then
+        bufnr = vim.fn.bufadd(path)
+    end
+    if bufnr == -1 then
+        return vim.json.encode({ ok = false, error = "failed to create buffer for file" })
+    end
+    if vim.fn.bufloaded(bufnr) == 0 then
+        vim.fn.bufload(bufnr)
+    end
+    if not vim.api.nvim_buf_is_valid(bufnr) then
+        return vim.json.encode({ ok = false, error = "invalid buffer for file" })
+    end
+else
+    bufnr = current_buf
+    path = current_path
+    same_file = true
+end
+
+for _, edit in ipairs(edits) do
+    local start_line = tonumber(edit.startLine)
+    local end_line = tonumber(edit.endLine)
+    local new_lines = edit.newLines
+    if type(start_line) ~= "number" or type(end_line) ~= "number" then
+        return vim.json.encode({ ok = false, error = "invalid edit line range" })
+    end
+    if type(new_lines) ~= "table" then
+        new_lines = { "" }
+    end
+    vim.api.nvim_buf_set_lines(bufnr, start_line, end_line, false, new_lines)
+end
+
+local target_line = tonumber(target_line_hint)
+if not target_line then
+    if same_file then
+        target_line = current_cursor[1]
+    else
+        target_line = 1
+    end
+end
+
+local winid = vim.fn.bufwinid(bufnr)
+if winid ~= -1 then
+    vim.api.nvim_set_current_win(winid)
+else
+    local ok_set = pcall(vim.api.nvim_win_set_buf, 0, bufnr)
+    if not ok_set then
+        local ok_edit, edit_err = pcall(function()
+            vim.cmd("silent keepalt edit " .. vim.fn.fnameescape(path))
+        end)
+        if not ok_edit then
+            return vim.json.encode({
+                ok = false,
+                error = tostring(edit_err),
+            })
+        end
+        bufnr = vim.api.nvim_get_current_buf()
+    end
+end
+
+local line_count = vim.api.nvim_buf_line_count(bufnr)
+if line_count < 1 then
+    line_count = 1
+end
+if target_line < 1 then
+    target_line = 1
+end
+if target_line > line_count then
+    target_line = line_count
+end
+
+vim.api.nvim_win_set_cursor(0, { target_line, 0 })
+pcall(vim.cmd, "normal! zz")
+
+return vim.json.encode({
+    ok = true,
+    filePath = path,
+    line = target_line,
+})
 "#
 }
 
@@ -689,6 +1024,16 @@ pub async fn nvim_write_file_for_terminal(
     path: &Path,
     content: &str,
 ) -> Result<(), String> {
+    emit_bridge_debug(
+        app_handle,
+        terminal_id,
+        "cursor_follow.requested",
+        Some(format!(
+            "source=write_text_file file={}",
+            path.to_string_lossy()
+        )),
+    );
+
     let conn = resolve_connection_for_terminal(app_handle, terminal_id).await?;
     let conn = conn.lock().await;
     let nvim = &conn.nvim;
@@ -704,12 +1049,57 @@ pub async fn nvim_write_file_for_terminal(
         .await
         .map_err(|e| format!("Neovim write_file lua failed: {}", e))?;
     let payload = parse_lua_json(result)?;
+    let (file_path, line, changed_line) = parse_cursor_follow_payload(payload)?;
 
-    if !payload["ok"].as_bool().unwrap_or(false) {
-        let err = payload["error"]
-            .as_str()
-            .unwrap_or("failed to write file through neovim");
-        return Err(err.to_string());
+    emit_bridge_debug(
+        app_handle,
+        terminal_id,
+        "cursor_follow.target_resolved",
+        Some(format!(
+            "source=write_text_file file={} line={} changed_line={}",
+            file_path,
+            line,
+            changed_line
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        )),
+    );
+
+    emit_cursor_follow(app_handle, terminal_id, &file_path, line, "write_text_file");
+    emit_bridge_debug(
+        app_handle,
+        terminal_id,
+        "cursor_follow.applied",
+        Some(format!(
+            "source=write_text_file file={} line={} changed_line={}",
+            file_path,
+            line,
+            changed_line
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        )),
+    );
+
+    Ok(())
+}
+
+async fn apply_buffer_edits_with_cursor_follow(
+    app_handle: &tauri::AppHandle,
+    terminal_id: &str,
+    nvim: &Neovim<Writer>,
+    edits: Vec<BufferEdit>,
+    source: &str,
+) -> Result<(), String> {
+    for (file_path, group) in group_edits_by_file(edits) {
+        apply_edit_group_with_cursor_follow(
+            app_handle,
+            terminal_id,
+            nvim,
+            file_path.as_deref(),
+            source,
+            group,
+        )
+        .await?;
     }
 
     Ok(())
@@ -1040,10 +1430,18 @@ pub async fn nvim_get_buffer_content(
 
 #[tauri::command]
 pub async fn nvim_apply_edit(
+    app_handle: tauri::AppHandle,
     state: tauri::State<'_, Mutex<NvimBridgeState>>,
     terminal_id: String,
     edit: BufferEdit,
 ) -> Result<(), String> {
+    emit_bridge_debug(
+        &app_handle,
+        &terminal_id,
+        "cursor_follow.requested",
+        Some("source=apply_edit".to_string()),
+    );
+
     let bridge = state.lock().await;
     let conn = bridge
         .connections
@@ -1054,21 +1452,24 @@ pub async fn nvim_apply_edit(
 
     let conn = conn.lock().await;
     let nvim = &conn.nvim;
-
-    let buf = nvim.get_current_buf().await.map_err(|e| e.to_string())?;
-    buf.set_lines(edit.start_line, edit.end_line, false, edit.new_lines)
+    apply_buffer_edits_with_cursor_follow(&app_handle, &terminal_id, nvim, vec![edit], "apply_edit")
         .await
-        .map_err(|e| e.to_string())?;
-
-    Ok(())
 }
 
 #[tauri::command]
 pub async fn nvim_apply_edits(
+    app_handle: tauri::AppHandle,
     state: tauri::State<'_, Mutex<NvimBridgeState>>,
     terminal_id: String,
     edits: Vec<BufferEdit>,
 ) -> Result<(), String> {
+    emit_bridge_debug(
+        &app_handle,
+        &terminal_id,
+        "cursor_follow.requested",
+        Some(format!("source=apply_edits count={}", edits.len())),
+    );
+
     let bridge = state.lock().await;
     let conn = bridge
         .connections
@@ -1079,20 +1480,8 @@ pub async fn nvim_apply_edits(
 
     let conn = conn.lock().await;
     let nvim = &conn.nvim;
-
-    let buf = nvim.get_current_buf().await.map_err(|e| e.to_string())?;
-
-    // Apply edits in reverse order to preserve line numbers
-    let mut sorted_edits = edits;
-    sorted_edits.sort_by(|a, b| b.start_line.cmp(&a.start_line));
-
-    for edit in sorted_edits {
-        buf.set_lines(edit.start_line, edit.end_line, false, edit.new_lines)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-
-    Ok(())
+    apply_buffer_edits_with_cursor_follow(&app_handle, &terminal_id, nvim, edits, "apply_edits")
+        .await
 }
 
 #[tauri::command]

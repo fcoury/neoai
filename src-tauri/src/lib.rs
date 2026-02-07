@@ -26,15 +26,12 @@ fn ghostty_create(
         })
         .map_err(|e| e.to_string())?;
 
-    rx.recv().unwrap_or_else(|_| Err("ghostty_create failed".to_string()))
+    rx.recv()
+        .unwrap_or_else(|_| Err("ghostty_create failed".to_string()))
 }
 
 #[tauri::command]
-fn ghostty_update_rect(
-    window: tauri::Window,
-    id: String,
-    rect: GhosttyRect,
-) -> Result<(), String> {
+fn ghostty_update_rect(window: tauri::Window, id: String, rect: GhosttyRect) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::channel();
     let window_clone = window.clone();
 
@@ -45,14 +42,12 @@ fn ghostty_update_rect(
         })
         .map_err(|e| e.to_string())?;
 
-    rx.recv().unwrap_or_else(|_| Err("ghostty_update_rect failed".to_string()))
+    rx.recv()
+        .unwrap_or_else(|_| Err("ghostty_update_rect failed".to_string()))
 }
 
 #[tauri::command]
-fn ghostty_destroy(
-    window: tauri::Window,
-    id: String,
-) -> Result<(), String> {
+fn ghostty_destroy(window: tauri::Window, id: String) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::channel();
 
     window
@@ -62,15 +57,12 @@ fn ghostty_destroy(
         })
         .map_err(|e| e.to_string())?;
 
-    rx.recv().unwrap_or_else(|_| Err("ghostty_destroy failed".to_string()))
+    rx.recv()
+        .unwrap_or_else(|_| Err("ghostty_destroy failed".to_string()))
 }
 
 #[tauri::command]
-fn ghostty_set_visible(
-    window: tauri::Window,
-    id: String,
-    visible: bool,
-) -> Result<(), String> {
+fn ghostty_set_visible(window: tauri::Window, id: String, visible: bool) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::channel();
 
     window
@@ -80,15 +72,12 @@ fn ghostty_set_visible(
         })
         .map_err(|e| e.to_string())?;
 
-    rx.recv().unwrap_or_else(|_| Err("ghostty_set_visible failed".to_string()))
+    rx.recv()
+        .unwrap_or_else(|_| Err("ghostty_set_visible failed".to_string()))
 }
 
 #[tauri::command]
-fn ghostty_focus(
-    window: tauri::Window,
-    id: String,
-    focused: bool,
-) -> Result<(), String> {
+fn ghostty_focus(window: tauri::Window, id: String, focused: bool) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::channel();
 
     window
@@ -98,15 +87,12 @@ fn ghostty_focus(
         })
         .map_err(|e| e.to_string())?;
 
-    rx.recv().unwrap_or_else(|_| Err("ghostty_focus failed".to_string()))
+    rx.recv()
+        .unwrap_or_else(|_| Err("ghostty_focus failed".to_string()))
 }
 
 #[tauri::command]
-fn ghostty_write_text(
-    window: tauri::Window,
-    id: String,
-    text: String,
-) -> Result<(), String> {
+fn ghostty_write_text(window: tauri::Window, id: String, text: String) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::channel();
 
     window
@@ -116,7 +102,8 @@ fn ghostty_write_text(
         })
         .map_err(|e| e.to_string())?;
 
-    rx.recv().unwrap_or_else(|_| Err("ghostty_write_text failed".to_string()))
+    rx.recv()
+        .unwrap_or_else(|_| Err("ghostty_write_text failed".to_string()))
 }
 
 #[tauri::command]

@@ -2,8 +2,8 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use acp::Agent as _;
@@ -131,7 +131,9 @@ impl acp::Client for AcpClientHandler {
         &self,
         args: acp::RequestPermissionRequest,
     ) -> acp::Result<acp::RequestPermissionResponse> {
-        let request_number = self.permission_request_counter.fetch_add(1, Ordering::Relaxed);
+        let request_number = self
+            .permission_request_counter
+            .fetch_add(1, Ordering::Relaxed);
         let request_id = format!("perm-{}", request_number);
         let session_id = args.session_id.to_string();
         let terminal_id = {
@@ -1111,9 +1113,9 @@ pub async fn acp_respond_permission_request(
         .ok_or_else(|| format!("Unknown permission request: {}", request_id))?;
 
     let outcome = match option_id {
-        Some(option_id) => acp::RequestPermissionOutcome::Selected(
-            acp::SelectedPermissionOutcome::new(option_id),
-        ),
+        Some(option_id) => {
+            acp::RequestPermissionOutcome::Selected(acp::SelectedPermissionOutcome::new(option_id))
+        }
         None => acp::RequestPermissionOutcome::Cancelled,
     };
 

@@ -15,8 +15,7 @@ fn main() {
             .map(|existing| existing != desired)
             .unwrap_or(true);
         if needs_write {
-            std::fs::write(mcp_cap_path, desired)
-                .expect("failed to write mcp-debug capability");
+            std::fs::write(mcp_cap_path, desired).expect("failed to write mcp-debug capability");
         }
     } else if mcp_cap_path.exists() {
         let _ = std::fs::remove_file(mcp_cap_path);
@@ -35,7 +34,8 @@ fn main() {
             let pkg_name = env::var("CARGO_PKG_NAME").unwrap();
             let out_dir = env::var_os("OUT_DIR").unwrap();
             let mut target = PathBuf::from(&out_dir);
-            let pop = |target: &mut PathBuf| assert!(target.pop(), "malformed OUT_DIR: {:?}", out_dir);
+            let pop =
+                |target: &mut PathBuf| assert!(target.pop(), "malformed OUT_DIR: {:?}", out_dir);
             while !target
                 .file_name()
                 .unwrap()

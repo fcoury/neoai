@@ -5,7 +5,12 @@ import { useAcpAgent } from "./useAcpAgent";
 import { useLocalStorage } from "./useLocalStorage";
 import type { ChatMessage } from "../types/ai-chat";
 import type { AcpEvent } from "../types/acp";
-import type { NvimAction, NvimActionEvent, NvimBridgeDebugEvent } from "../types/nvim";
+import type {
+  NvimAction,
+  NvimActionEvent,
+  NvimBridgeDebugEvent,
+  NvimCursorFollowEvent,
+} from "../types/nvim";
 
 function nextMessageId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -288,6 +293,22 @@ export function useAiChat(terminalId: string | null, nvim: NvimBridgeApi): AiCha
     const unlisten = listen<NvimBridgeDebugEvent>("nvim-bridge-debug", (event) => {
       if (event.payload.terminalId !== terminalId) return;
       trace(`bridge.${event.payload.stage}`, event.payload.detail);
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [terminalId, trace]);
+
+  useEffect(() => {
+    if (!terminalId) return;
+
+    const unlisten = listen<NvimCursorFollowEvent>("nvim-cursor-follow", (event) => {
+      if (event.payload.terminalId !== terminalId) return;
+      trace(
+        "cursor.follow",
+        `${event.payload.filePath}:${event.payload.line} (${event.payload.source})`
+      );
     });
 
     return () => {
