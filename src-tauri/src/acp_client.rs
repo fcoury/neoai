@@ -14,7 +14,9 @@ use tauri::{Emitter, Manager};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
+use crate::app_config;
 use crate::nvim_bridge::{nvim_read_file_for_terminal, nvim_write_file_for_terminal};
+use crate::tmux_runtime;
 
 const CODEX_ACP_VERSION: &str = "0.9.2";
 const CODEX_RELEASES_URL: &str = "https://github.com/zed-industries/codex-acp/releases";
@@ -285,6 +287,245 @@ impl acp::Client for AcpClientHandler {
 
         Ok(acp::WriteTextFileResponse::new())
     }
+
+    async fn create_terminal(
+        &self,
+        args: acp::CreateTerminalRequest,
+    ) -> acp::Result<acp::CreateTerminalResponse> {
+        let session_id = args.session_id.to_string();
+        let host_terminal_id = {
+            let bindings = self.session_terminal_bindings.lock().await;
+            bindings.get(&session_id).cloned()
+        }
+        .ok_or_else(|| {
+            acp::Error::invalid_params().data(serde_json::json!({
+                "reason": "session is not bound to a terminal",
+                "sessionId": session_id
+            }))
+        })?;
+
+        let acp::CreateTerminalRequest {
+            session_id: _,
+            command,
+            args: command_args,
+            env,
+            cwd,
+            output_byte_limit,
+            meta,
+            ..
+        } = args;
+
+        tmux_runtime::detect_tmux_available().await.map_err(|err| {
+            acp::Error::method_not_found().data(serde_json::json!({
+                "reason": "tmux unavailable",
+                "detail": err
+            }))
+        })?;
+
+        let tmux_state = self
+            .app_handle
+            .state::<Mutex<tmux_runtime::TmuxRuntimeState>>();
+        let (tmux_enabled, assigned_session_name, assigned_names) = {
+            let mut state = tmux_state.lock().await;
+            (
+                state.terminal_enabled(&host_terminal_id),
+                state.session_name(&host_terminal_id),
+                state.assigned_session_names(),
+            )
+        };
+        if !tmux_enabled {
+            return Err(acp::Error::method_not_found().data(serde_json::json!({
+                "reason": "tmux disabled for this terminal",
+                "terminalId": host_terminal_id
+            })));
+        }
+
+        let requested_mode = requested_tmux_mode(meta.as_ref());
+        let (command_mode, command_mode_source) = {
+            let config_state = self
+                .app_handle
+                .state::<std::sync::Mutex<app_config::AppConfigState>>();
+            let state = config_state
+                .lock()
+                .map_err(|_| acp::Error::internal_error().data("App config lock poisoned"))?;
+            state.resolve_tmux_command_mode(requested_mode)
+        };
+        log::info!(
+            "ACP tmux mode resolved: terminal='{}' requested='{}' applied='{}' source='{}'",
+            host_terminal_id,
+            requested_mode
+                .map(|mode| mode.as_str().to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            command_mode.as_str(),
+            command_mode_source
+        );
+
+        let session_name = if let Some(name) = assigned_session_name {
+            name
+        } else {
+            let base_name = tmux_runtime::session_base_name(cwd.as_deref(), &host_terminal_id);
+            let chosen = tmux_runtime::find_available_session_name(&base_name, &assigned_names)
+                .await
+                .map_err(|e| acp::Error::internal_error().data(e))?;
+            let mut state = tmux_state.lock().await;
+            state.set_session_name(&host_terminal_id, chosen.clone());
+            chosen
+        };
+
+        let cwd_ref = cwd.as_deref();
+        tmux_runtime::ensure_session_exists(&session_name, cwd_ref)
+            .await
+            .map_err(|e| acp::Error::internal_error().data(e))?;
+
+        let pane_id = tmux_runtime::create_command_pane(
+            &session_name,
+            command_mode,
+            &command,
+            &command_args,
+            &env,
+            cwd_ref,
+        )
+        .await
+        .map_err(|e| acp::Error::internal_error().data(e))?;
+
+        let terminal_handle = {
+            let mut state = tmux_state.lock().await;
+            state.register_command(&host_terminal_id, pane_id, output_byte_limit)
+        };
+
+        Ok(acp::CreateTerminalResponse::new(terminal_handle))
+    }
+
+    async fn terminal_output(
+        &self,
+        args: acp::TerminalOutputRequest,
+    ) -> acp::Result<acp::TerminalOutputResponse> {
+        let command_id = args.terminal_id.to_string();
+        let tmux_state = self
+            .app_handle
+            .state::<Mutex<tmux_runtime::TmuxRuntimeState>>();
+        let command = {
+            let state = tmux_state.lock().await;
+            state.command(&command_id)
+        }
+        .ok_or_else(|| {
+            acp::Error::invalid_params().data(serde_json::json!({
+                "reason": "unknown tmux terminal id",
+                "terminalId": command_id
+            }))
+        })?;
+
+        let output = tmux_runtime::pane_output(&command.pane_id)
+            .await
+            .map_err(|e| acp::Error::internal_error().data(e))?;
+        let pane_state = tmux_runtime::pane_state(&command.pane_id)
+            .await
+            .map_err(|e| acp::Error::internal_error().data(e))?;
+
+        let (output, truncated) = tmux_runtime::truncate_output(output, command.output_byte_limit);
+        let mut response = acp::TerminalOutputResponse::new(output, truncated);
+        if pane_state.dead {
+            response = response
+                .exit_status(acp::TerminalExitStatus::new().exit_code(pane_state.exit_code));
+        }
+        Ok(response)
+    }
+
+    async fn wait_for_terminal_exit(
+        &self,
+        args: acp::WaitForTerminalExitRequest,
+    ) -> acp::Result<acp::WaitForTerminalExitResponse> {
+        let command_id = args.terminal_id.to_string();
+        let tmux_state = self
+            .app_handle
+            .state::<Mutex<tmux_runtime::TmuxRuntimeState>>();
+        let command = {
+            let state = tmux_state.lock().await;
+            state.command(&command_id)
+        }
+        .ok_or_else(|| {
+            acp::Error::invalid_params().data(serde_json::json!({
+                "reason": "unknown tmux terminal id",
+                "terminalId": command_id
+            }))
+        })?;
+
+        loop {
+            let pane_state = tmux_runtime::pane_state(&command.pane_id)
+                .await
+                .map_err(|e| acp::Error::internal_error().data(e))?;
+
+            if pane_state.dead {
+                let exit_status = acp::TerminalExitStatus::new().exit_code(pane_state.exit_code);
+                return Ok(acp::WaitForTerminalExitResponse::new(exit_status));
+            }
+
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    async fn kill_terminal_command(
+        &self,
+        args: acp::KillTerminalCommandRequest,
+    ) -> acp::Result<acp::KillTerminalCommandResponse> {
+        let command_id = args.terminal_id.to_string();
+        let tmux_state = self
+            .app_handle
+            .state::<Mutex<tmux_runtime::TmuxRuntimeState>>();
+        let command = {
+            let state = tmux_state.lock().await;
+            state.command(&command_id)
+        }
+        .ok_or_else(|| {
+            acp::Error::invalid_params().data(serde_json::json!({
+                "reason": "unknown tmux terminal id",
+                "terminalId": command_id
+            }))
+        })?;
+
+        tmux_runtime::interrupt_pane(&command.pane_id)
+            .await
+            .map_err(|e| acp::Error::internal_error().data(e))?;
+
+        Ok(acp::KillTerminalCommandResponse::new())
+    }
+
+    async fn release_terminal(
+        &self,
+        args: acp::ReleaseTerminalRequest,
+    ) -> acp::Result<acp::ReleaseTerminalResponse> {
+        let command_id = args.terminal_id.to_string();
+        let tmux_state = self
+            .app_handle
+            .state::<Mutex<tmux_runtime::TmuxRuntimeState>>();
+        let command = {
+            let mut state = tmux_state.lock().await;
+            state.remove_command(&command_id)
+        }
+        .ok_or_else(|| {
+            acp::Error::invalid_params().data(serde_json::json!({
+                "reason": "unknown tmux terminal id",
+                "terminalId": command_id
+            }))
+        })?;
+
+        if let Err(err) = tmux_runtime::kill_pane(&command.pane_id).await {
+            log::warn!(
+                "Failed to kill pane '{}' while releasing terminal '{}': {}",
+                command.pane_id,
+                command_id,
+                err
+            );
+        }
+
+        Ok(acp::ReleaseTerminalResponse::new())
+    }
+}
+
+fn requested_tmux_mode(meta: Option<&acp::Meta>) -> Option<tmux_runtime::TmuxCommandMode> {
+    meta.and_then(|meta| meta.get("neoai_tmux_mode"))
+        .and_then(|value| value.as_str())
+        .and_then(tmux_runtime::TmuxCommandMode::from_config_str)
 }
 
 fn current_linux_env() -> Option<&'static str> {
@@ -789,15 +1030,24 @@ async fn acp_worker(
             tokio::task::spawn_local(io_future);
 
             // Initialize handshake
+            let tmux_available = tmux_runtime::detect_tmux_available().await.is_ok();
+            let mut capability_meta = acp::Meta::new();
+            capability_meta.insert(
+                "terminal_output".to_string(),
+                serde_json::Value::Bool(tmux_available),
+            );
             let init_result = conn
                 .initialize(
                     acp::InitializeRequest::new(acp::ProtocolVersion::V1)
                         .client_capabilities(
-                            acp::ClientCapabilities::new().fs(
-                                acp::FileSystemCapability::new()
-                                    .read_text_file(true)
-                                    .write_text_file(true),
-                            ),
+                            acp::ClientCapabilities::new()
+                                .fs(
+                                    acp::FileSystemCapability::new()
+                                        .read_text_file(true)
+                                        .write_text_file(true),
+                                )
+                                .terminal(tmux_available)
+                                .meta(capability_meta),
                         )
                         .client_info(acp::Implementation::new("neoai", "0.1.0").title("neoai Terminal IDE")),
                 )
