@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "neoai",
+  "productName": "NeoAI",
   "version": "0.1.0",
   "identifier": "com.fcoury.neoai",
   "build": {
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "neoai",
+        "title": "NeoAI",
         "width": 800,
         "height": 600
       }

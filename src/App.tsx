@@ -126,7 +126,7 @@ function App() {
       onMouseDownCapture={handleAppMouseDownCapture}
     >
       <header className="toolbar">
-        <div className="toolbar-title">neoai</div>
+        <div className="toolbar-title">NeoAI</div>
         <div className="toolbar-actions">
           <button
             type="button"
