@@ -1,0 +1,50 @@
+<svg width="1024" height="1024" viewBox="-72 -72 1168 1168" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- 1. Background: Dark Squircle -->
+  <!-- Using a path that approximates Apple's superellipse more closely than a standard rect -->
+  <path d="M512 0C136 0 0 136 0 512C0 888 136 1024 512 1024C888 1024 1024 888 1024 512C1024 136 888 0 512 0Z" fill="url(#bg_gradient)"/>
+  
+  <!-- 2. Subtle Border/Rim Light -->
+  <path d="M512 20C155 20 20 155 20 512C20 869 155 1004 512 1004C869 1004 1004 869 1004 512C1004 155 869 20 512 20Z" stroke="url(#border_gradient)" stroke-width="20" opacity="0.4"/>
+
+  <!-- 3. The "Neo" N Logo -->
+  <g filter="url(#glow)">
+    <!-- Left Bar (Blue) -->
+    <path d="M280 280V744" stroke="#3b82f6" stroke-width="90" stroke-linecap="round"/>
+    
+    <!-- Right Bar (Purple) -->
+    <path d="M744 280V744" stroke="#8b5cf6" stroke-width="90" stroke-linecap="round"/>
+    
+    <!-- Diagonal Bridge (Gradient) -->
+    <path d="M280 280L744 744" stroke="url(#diag_gradient)" stroke-width="90" stroke-linecap="round"/>
+  </g>
+
+  <!-- 4. Glass Gloss Overlay -->
+  <path d="M512 0C136 0 0 136 0 512C0 550 5 580 20 610C50 300 250 100 900 60C780 20 650 0 512 0Z" fill="white" opacity="0.05"/>
+
+  <!-- Definitions -->
+  <defs>
+    <!-- Background Gradient: Deep coding environment -->
+    <linearGradient id="bg_gradient" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1b2028"/>
+      <stop offset="100%" stop-color="#080a0e"/>
+    </linearGradient>
+
+    <!-- Diagonal Gradient: Connecting Blue to Purple -->
+    <linearGradient id="diag_gradient" x1="280" y1="280" x2="744" y2="744" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+
+    <!-- Border Gradient: Simulating light catching the edge -->
+    <linearGradient id="border_gradient" x1="512" y1="0" x2="512" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="white" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="white" stop-opacity="0.05"/>
+    </linearGradient>
+
+    <!-- Glow Filter -->
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+</svg>

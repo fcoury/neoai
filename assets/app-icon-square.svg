@@ -1,0 +1,39 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- 1. Background: macOS-like rounded rectangle -->
+  <rect width="1024" height="1024" rx="224" fill="url(#bg_gradient)"/>
+
+  <!-- 2. Subtle border/rim light -->
+  <rect x="12" y="12" width="1000" height="1000" rx="212" stroke="url(#border_gradient)" stroke-width="20" opacity="0.42"/>
+
+  <!-- 3. The "Neo" N Logo (scaled up) -->
+  <g filter="url(#glow)">
+    <path d="M238 230V794" stroke="#3b82f6" stroke-width="112" stroke-linecap="round"/>
+    <path d="M786 230V794" stroke="#8b5cf6" stroke-width="112" stroke-linecap="round"/>
+    <path d="M238 230L786 794" stroke="url(#diag_gradient)" stroke-width="112" stroke-linecap="round"/>
+  </g>
+
+  <!-- 4. Gloss overlay -->
+  <path d="M224 0H800C924 0 1024 100 1024 224V340C960 220 846 136 704 118H320C178 136 64 220 0 340V224C0 100 100 0 224 0Z" fill="white" opacity="0.06"/>
+
+  <defs>
+    <linearGradient id="bg_gradient" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1b2028"/>
+      <stop offset="100%" stop-color="#080a0e"/>
+    </linearGradient>
+
+    <linearGradient id="diag_gradient" x1="238" y1="230" x2="786" y2="794" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+
+    <linearGradient id="border_gradient" x1="512" y1="12" x2="512" y2="1012" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="white" stop-opacity="0.32"/>
+      <stop offset="100%" stop-color="white" stop-opacity="0.06"/>
+    </linearGradient>
+
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+</svg>
