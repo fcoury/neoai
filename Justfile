@@ -123,7 +123,8 @@ install:
   npm install
 
 build:
-  npm run build
+  test -f {{ghostty_location}}/libghostty.dylib
+  GHOSTTY_LOCATION={{ghostty_location}} DYLD_LIBRARY_PATH={{ghostty_location}} npm run tauri build
 
 check:
   test -f {{ghostty_location}}/libghostty.dylib
@@ -143,5 +144,4 @@ tauri-check: check
 tauri-dev: dev
 
 tauri-build:
-  test -f {{ghostty_location}}/libghostty.dylib
-  GHOSTTY_LOCATION={{ghostty_location}} DYLD_LIBRARY_PATH={{ghostty_location}} npm run tauri build
+  @just build
