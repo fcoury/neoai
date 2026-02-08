@@ -249,6 +249,23 @@ impl GhosttyManager {
             Ok(())
         }
     }
+
+    pub fn screenshot(&mut self, id: &str) -> Result<Vec<u8>, String> {
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = id;
+            Err("Ghostty embedding is only supported on macOS".to_string())
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let instance = self
+                .instances
+                .get_mut(id)
+                .ok_or_else(|| format!("Ghostty instance not found: {id}"))?;
+            instance.screenshot()
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -524,6 +541,10 @@ impl GhosttyInstance {
                 focused: false,
             },
         );
+    }
+
+    fn screenshot(&mut self) -> Result<Vec<u8>, String> {
+        Err("Ghostty screenshot capture is not available".to_string())
     }
 
     fn handle_key(&mut self, event: &NSEvent, action: ghostty_input_action_e) {

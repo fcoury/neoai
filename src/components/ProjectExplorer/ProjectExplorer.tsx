@@ -1,17 +1,23 @@
-import { useEffect, useRef } from 'react';
-import { open } from '@tauri-apps/plugin-dialog';
-import { useProjectExplorer } from '../../hooks/useProjectExplorer';
-import type { ProjectFolder } from '../../types/project-explorer';
-import { ProjectList } from './ProjectList';
-import './ProjectExplorer.css';
+import { useEffect, useRef } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
+import type { UseProjectExplorerReturn } from "../../hooks/useProjectExplorer";
+import type { ProjectFolder } from "../../types/project-explorer";
+import { ProjectList } from "./ProjectList";
+import "./ProjectExplorer.css";
 
 interface ProjectExplorerProps {
+  explorer: UseProjectExplorerReturn;
   onSelectFolder?: (folder: ProjectFolder) => void;
   onRemoveProject?: (folderIds: string[]) => void;
   onRemoveFolder?: (folderId: string) => void;
 }
 
-export function ProjectExplorer({ onSelectFolder, onRemoveProject, onRemoveFolder }: ProjectExplorerProps) {
+export function ProjectExplorer({
+  explorer,
+  onSelectFolder,
+  onRemoveProject,
+  onRemoveFolder,
+}: ProjectExplorerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const {
     projects,
@@ -26,75 +32,74 @@ export function ProjectExplorer({ onSelectFolder, onRemoveProject, onRemoveFolde
     addFolder,
     removeProject,
     removeFolder,
-  } = useProjectExplorer();
+  } = explorer;
 
-  // Wrap selectFolder to also call onSelectFolder
   const handleSelectFolder = (folder: ProjectFolder) => {
     selectFolder(folder);
     onSelectFolder?.(folder);
   };
 
   const handleAddProject = async () => {
-    const selected = await open({ directory: true, multiple: false, title: 'Select Project Folder' });
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: "Select Project Folder",
+    });
     if (selected) {
-      const name = selected.split('/').pop() || selected;
-      addProject(selected, name);
+      const name = selected.split("/").pop() || selected;
+      await addProject(selected, name);
     }
   };
 
-  const handleRemoveProject = (projectId: string) => {
-    const project = projects.find((p) => p.id === projectId);
-    const folderIds = project ? project.folders.map((f) => f.id) : [];
-    removeProject(projectId);
+  const handleRemoveProject = async (projectId: string) => {
+    const project = projects.find((candidate) => candidate.id === projectId);
+    const folderIds = project ? project.folders.map((folder) => folder.id) : [];
+    await removeProject(projectId);
     onRemoveProject?.(folderIds);
   };
 
-  const handleRemoveFolder = (folderId: string) => {
-    removeFolder(folderId);
+  const handleRemoveFolder = async (folderId: string) => {
+    await removeFolder(folderId);
     onRemoveFolder?.(folderId);
   };
 
   const handleAddFolder = async (projectId: string) => {
-    const selected = await open({ directory: true, multiple: false, title: 'Add Folder to Project' });
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: "Add Folder to Project",
+    });
     if (selected) {
-      const name = selected.split('/').pop() || selected;
-      addFolder(projectId, selected, name);
+      const name = selected.split("/").pop() || selected;
+      await addFolder(projectId, selected, name);
     }
   };
 
-  // Attach keyboard listeners
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    // Use window listeners for global shortcuts (cmd+1-9)
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
 
     return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
     };
   }, [handleKeyDown, handleKeyUp]);
 
   const containerClass = [
-    'project-explorer',
-    showHotkeys ? 'project-explorer--show-hotkeys' : '',
-  ].filter(Boolean).join(' ');
+    "project-explorer",
+    showHotkeys ? "project-explorer--show-hotkeys" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
-    <div
-      ref={containerRef}
-      className={containerClass}
-      tabIndex={-1}
-    >
+    <div ref={containerRef} className={containerClass} tabIndex={-1}>
       <div className="project-explorer-header">
         <h3 className="project-explorer-title">Projects</h3>
-        <button
-          className="add-project-btn"
-          onClick={handleAddProject}
-          title="Add project"
-        >
+        <button className="add-project-btn" onClick={handleAddProject} title="Add project">
           +
         </button>
       </div>
@@ -113,8 +118,12 @@ export function ProjectExplorer({ onSelectFolder, onRemoveProject, onRemoveFolde
           onSelectFolder={handleSelectFolder}
           onPRClick={openPullRequest}
           onAddFolder={handleAddFolder}
-          onRemoveProject={handleRemoveProject}
-          onRemoveFolder={handleRemoveFolder}
+          onRemoveProject={(projectId) => {
+            void handleRemoveProject(projectId);
+          }}
+          onRemoveFolder={(folderId) => {
+            void handleRemoveFolder(folderId);
+          }}
           focusedFolderId={focusedFolderId}
         />
       )}

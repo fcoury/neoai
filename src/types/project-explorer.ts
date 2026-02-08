@@ -19,6 +19,8 @@ export interface ProjectFolder {
   diffStats: GitDiffStats | null;
   pullRequest: PullRequest | null;
   isActive?: boolean;
+  screenshotPath?: string | null;
+  lastUsedAt?: number | null;
 }
 
 export interface Project {

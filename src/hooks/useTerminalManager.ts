@@ -23,11 +23,24 @@ export function useTerminalManager() {
     setActiveTerminalId(termId);
   }, []);
 
-  const destroyTerminal = useCallback((termId: string) => {
-    // Clean up the Neovim socket file on the Rust side
-    invoke("remove_socket_path", { terminalId: termId }).catch((e) =>
-      console.error("remove_socket_path error:", e)
-    );
+  const destroyTerminal = useCallback(async (termId: string) => {
+    try {
+      await invoke("nvim_disconnect", { terminalId: termId });
+    } catch (e) {
+      console.error("nvim_disconnect error:", e);
+    }
+
+    try {
+      await invoke("acp_unbind_terminal", { terminalId: termId });
+    } catch (e) {
+      console.error("acp_unbind_terminal error:", e);
+    }
+
+    try {
+      await invoke("remove_socket_path", { terminalId: termId });
+    } catch (e) {
+      console.error("remove_socket_path error:", e);
+    }
     setTerminals(prev => {
       const next = new Map(prev);
       next.delete(termId);

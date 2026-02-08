@@ -1,5 +1,6 @@
 mod acp_client;
 mod app_config;
+mod database;
 mod ghostty_embed;
 mod nvim_bridge;
 mod socket_manager;
@@ -9,6 +10,14 @@ use ghostty_embed::{with_manager, GhosttyOptions, GhosttyRect};
 use socket_manager::SocketManager;
 use tauri::Manager;
 use tokio::sync::Mutex;
+
+const FALLBACK_SCREENSHOT_PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x04, 0x00, 0x00, 0x00, 0xb5, 0x1c, 0x0c,
+    0x02, 0x00, 0x00, 0x00, 0x0b, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xfc, 0xff, 0x1f, 0x00,
+    0x03, 0x03, 0x02, 0x00, 0xef, 0x97, 0x94, 0x5f, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44,
+    0xae, 0x42, 0x60, 0x82,
+];
 
 #[tauri::command]
 fn ghostty_create(
@@ -106,6 +115,42 @@ fn ghostty_write_text(window: tauri::Window, id: String, text: String) -> Result
 
     rx.recv()
         .unwrap_or_else(|_| Err("ghostty_write_text failed".to_string()))
+}
+
+#[tauri::command]
+fn ghostty_screenshot(window: tauri::Window, id: String) -> Result<String, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let id_for_capture = id.clone();
+
+    window
+        .run_on_main_thread(move || {
+            let res = with_manager(|manager| manager.screenshot(&id_for_capture));
+            let _ = tx.send(res);
+        })
+        .map_err(|e| e.to_string())?;
+
+    let bytes = match rx
+        .recv()
+        .unwrap_or_else(|_| Err("ghostty_screenshot failed".to_string()))
+    {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            log::warn!("ghostty_screenshot fallback: {}", error);
+            FALLBACK_SCREENSHOT_PNG.to_vec()
+        }
+    };
+    let safe_id = id.replace('/', "_");
+    let screenshots_dir = database::resolve_app_root_dir()?.join("screenshots");
+    std::fs::create_dir_all(&screenshots_dir).map_err(|e| {
+        format!(
+            "Failed to create screenshot directory '{}': {e}",
+            screenshots_dir.display()
+        )
+    })?;
+    let path = screenshots_dir.join(format!("{safe_id}.png"));
+    std::fs::write(&path, bytes)
+        .map_err(|e| format!("Failed to save screenshot '{}': {e}", path.display()))?;
+    Ok(path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -263,6 +308,8 @@ async fn nvim_start_in_tmux(
 pub fn run() {
     // Clean up sockets left behind by crashed instances
     SocketManager::cleanup_stale();
+    let db_path = database::resolve_db_path().expect("Failed to resolve sqlite database path");
+    let db = database::Database::new(&db_path).expect("Failed to initialize sqlite database");
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
@@ -273,6 +320,7 @@ pub fn run() {
         .manage(std::sync::Mutex::new(app_config::AppConfigState::default()))
         .manage(Mutex::new(tmux_runtime::TmuxRuntimeState::new()))
         .manage(std::sync::Mutex::new(SocketManager::new()))
+        .manage(std::sync::Mutex::new(db))
         .invoke_handler(tauri::generate_handler![
             // Ghostty
             ghostty_create,
@@ -281,6 +329,25 @@ pub fn run() {
             ghostty_set_visible,
             ghostty_focus,
             ghostty_write_text,
+            ghostty_screenshot,
+            // Database
+            database::db_bootstrap_state,
+            database::db_load_projects,
+            database::db_add_project,
+            database::db_remove_project,
+            database::db_toggle_project,
+            database::db_add_folder,
+            database::db_remove_folder,
+            database::db_set_active_folder,
+            database::db_load_messages,
+            database::db_save_message,
+            database::db_update_message,
+            database::db_clear_messages,
+            database::db_update_folder_session,
+            database::db_get_setting,
+            database::db_set_setting,
+            database::db_get_all_settings,
+            database::db_migrate_from_localstorage,
             // Neovim bridge
             nvim_bridge::nvim_connect,
             nvim_bridge::nvim_disconnect,
@@ -298,6 +365,7 @@ pub fn run() {
             acp_client::acp_stop_agent,
             acp_client::acp_agent_status,
             acp_client::acp_create_session,
+            acp_client::acp_unbind_terminal,
             acp_client::acp_send_prompt,
             acp_client::acp_respond_permission_request,
             // tmux

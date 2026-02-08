@@ -22,6 +22,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-mcp-bridge = { version = "0.8", optional = true }
+rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 raw-window-handle = "0.6"
@@ -44,8 +45,8 @@ toml = "0.8"
 [target.'cfg(target_os = "macos")'.dependencies]
 ghostty-sys = "0.1.1"
 objc2 = { version = "0.5.2", default-features = false, features = ["alloc", "std"] }
-objc2-app-kit = { version = "0.2.2", default-features = false, features = ["std", "NSApplication", "NSRunningApplication", "NSGraphics", "NSWindow", "NSView", "NSEvent", "NSResponder", "NSTrackingArea", "objc2-quartz-core"] }
-objc2-foundation = { version = "0.2.2", default-features = false, features = ["std", "block2", "NSObject", "NSThread", "NSRunLoop", "NSTimer", "NSDate", "NSString", "NSGeometry", "NSNotification", "NSObjCRuntime"] }
+objc2-app-kit = { version = "0.2.2", default-features = false, features = ["std", "NSApplication", "NSRunningApplication", "NSGraphics", "NSWindow", "NSView", "NSEvent", "NSResponder", "NSTrackingArea", "NSBitmapImageRep", "NSImage", "NSGraphicsContext", "objc2-quartz-core"] }
+objc2-foundation = { version = "0.2.2", default-features = false, features = ["std", "block2", "NSObject", "NSThread", "NSRunLoop", "NSTimer", "NSDate", "NSString", "NSGeometry", "NSNotification", "NSObjCRuntime", "NSData"] }
 block2 = { version = "0.5.1", default-features = false, features = ["std"] }
 objc2-quartz-core = { version = "0.2.2", default-features = false, features = ["std", "CALayer"] }
 

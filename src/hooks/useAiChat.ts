@@ -1,8 +1,8 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import type { NvimBridgeApi } from "./useNvimBridge";
 import { useAcpAgent } from "./useAcpAgent";
-import { useLocalStorage } from "./useLocalStorage";
 import type { ChatMessage } from "../types/ai-chat";
 import type { AcpEvent } from "../types/acp";
 import type {
@@ -47,21 +47,106 @@ export interface AiChatController {
 
 export function useAiChat(terminalId: string | null, nvim: NvimBridgeApi): AiChatController {
   const acp = useAcpAgent();
-  const [messages, setMessages] = useLocalStorage<ChatMessage[]>('libg:chatMessages', []);
+  const folderId = terminalId?.replace(/^terminal-/, "") ?? null;
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [autoApply, setAutoApply] = useLocalStorage<boolean>('libg:autoApply', false);
+  const [autoApply, setAutoApply] = useState(false);
   const [traceEvents, setTraceEvents] = useState<AiTraceEvent[]>([]);
+  const [messagesLoaded, setMessagesLoaded] = useState(false);
+  const [autoApplyLoaded, setAutoApplyLoaded] = useState(false);
+  const persistVersionRef = useRef(0);
 
-  // Trim messages on mount to prevent unbounded growth
+  // Load settings once from DB
   useEffect(() => {
-    setMessages((prev) => {
-      if (prev.length > MAX_PERSISTED_MESSAGES) {
-        return prev.slice(-MAX_PERSISTED_MESSAGES);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const raw = await invoke<string | null>("db_get_setting", { key: "auto_apply" });
+        if (cancelled) return;
+        if (raw === "true") {
+          setAutoApply(true);
+        } else if (raw === "false") {
+          setAutoApply(false);
+        }
+      } catch (error) {
+        console.error("db_get_setting(auto_apply) error:", error);
+      } finally {
+        if (!cancelled) {
+          setAutoApplyLoaded(true);
+        }
       }
-      return prev;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  useEffect(() => {
+    if (!autoApplyLoaded) return;
+    void invoke("db_set_setting", {
+      key: "auto_apply",
+      value: autoApply ? "true" : "false",
+    }).catch((error) => {
+      console.error("db_set_setting(auto_apply) error:", error);
+    });
+  }, [autoApply, autoApplyLoaded]);
+
+  // Load messages for the active folder
+  useEffect(() => {
+    setMessagesLoaded(false);
+    setMessages([]);
+    if (!folderId) {
+      setMessagesLoaded(true);
+      return;
+    }
+
+    let cancelled = false;
+    void invoke<ChatMessage[]>("db_load_messages", { folderId })
+      .then((loaded) => {
+        if (cancelled) return;
+        setMessages(loaded.slice(-MAX_PERSISTED_MESSAGES));
+      })
+      .catch((error) => {
+        console.error("db_load_messages error:", error);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setMessagesLoaded(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [folderId]);
+
+  // Persist current in-memory messages for the active folder.
+  useEffect(() => {
+    if (!folderId || !messagesLoaded) return;
+    const trimmed = messages.slice(-MAX_PERSISTED_MESSAGES);
+    const version = persistVersionRef.current + 1;
+    persistVersionRef.current = version;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        if (persistVersionRef.current !== version) return;
+        try {
+          await invoke("db_clear_messages", { folderId });
+          if (persistVersionRef.current !== version) return;
+          for (const message of trimmed) {
+            if (persistVersionRef.current !== version) return;
+            await invoke("db_save_message", { folderId, message });
+          }
+        } catch (error) {
+          console.error("db message persistence error:", error);
+        }
+      })();
+    }, 120);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [folderId, messages, messagesLoaded]);
+
   const currentAssistantIdRef = useRef<string | null>(null);
   const autoApplyRef = useRef(autoApply);
   const actionTriggeredRef = useRef(false);

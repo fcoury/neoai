@@ -1314,6 +1314,21 @@ pub async fn acp_create_session(
 }
 
 #[tauri::command]
+pub async fn acp_unbind_terminal(
+    state: tauri::State<'_, Mutex<AcpClientState>>,
+    terminal_id: String,
+) -> Result<(), String> {
+    let session_terminal_bindings = {
+        let acp_state = state.lock().await;
+        acp_state.session_terminal_bindings.clone()
+    };
+
+    let mut bindings = session_terminal_bindings.lock().await;
+    bindings.retain(|_, bound_terminal_id| bound_terminal_id != &terminal_id);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn acp_send_prompt(
     state: tauri::State<'_, Mutex<AcpClientState>>,
     _app_handle: tauri::AppHandle,
