@@ -1,28 +1,34 @@
-<svg width="1024" height="1024" viewBox="-72 -72 1168 1168" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- 1. Background: Dark Squircle -->
-  <!-- Using a path that approximates Apple's superellipse more closely than a standard rect -->
-  <path d="M512 0C136 0 0 136 0 512C0 888 136 1024 512 1024C888 1024 1024 888 1024 512C1024 136 888 0 512 0Z" fill="url(#bg_gradient)"/>
-  
-  <!-- 2. Subtle Border/Rim Light -->
-  <path d="M512 20C155 20 20 155 20 512C20 869 155 1004 512 1004C869 1004 1004 869 1004 512C1004 155 869 20 512 20Z" stroke="url(#border_gradient)" stroke-width="20" opacity="0.4"/>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- All content scaled to ~80% and centered for proper macOS icon padding -->
+  <g transform="translate(100, 100) scale(0.80469)">
+    <!-- 1. Background: macOS-style rounded rectangle -->
+    <rect width="1024" height="1024" rx="228" fill="url(#bg_gradient)"/>
 
-  <!-- 3. The "Neo" N Logo -->
-  <g filter="url(#glow)">
-    <!-- Left Bar (Blue) -->
-    <path d="M280 280V744" stroke="#3b82f6" stroke-width="90" stroke-linecap="round"/>
-    
-    <!-- Right Bar (Purple) -->
-    <path d="M744 280V744" stroke="#8b5cf6" stroke-width="90" stroke-linecap="round"/>
-    
-    <!-- Diagonal Bridge (Gradient) -->
-    <path d="M280 280L744 744" stroke="url(#diag_gradient)" stroke-width="90" stroke-linecap="round"/>
+    <!-- 2. Very subtle border -->
+    <rect x="4" y="4" width="1016" height="1016" rx="225" stroke="url(#border_gradient)" stroke-width="8" opacity="0.15" fill="none"/>
+
+    <!-- 3. The "Neo" N Logo -->
+    <g filter="url(#glow)">
+      <!-- Left Bar (Blue) -->
+      <path d="M280 280V744" stroke="#3b82f6" stroke-width="90" stroke-linecap="round"/>
+
+      <!-- Right Bar (Purple) -->
+      <path d="M744 280V744" stroke="#8b5cf6" stroke-width="90" stroke-linecap="round"/>
+
+      <!-- Diagonal Bridge (Gradient) -->
+      <path d="M280 280L744 744" stroke="url(#diag_gradient)" stroke-width="90" stroke-linecap="round"/>
+    </g>
+
+    <!-- 4. Glass Gloss Overlay (organic curved reflection, clipped to icon shape) -->
+    <path d="M0 0H1024V400C900 280 600 500 0 350Z" fill="white" opacity="0.06" clip-path="url(#icon_clip)"/>
   </g>
-
-  <!-- 4. Glass Gloss Overlay -->
-  <path d="M512 0C136 0 0 136 0 512C0 550 5 580 20 610C50 300 250 100 900 60C780 20 650 0 512 0Z" fill="white" opacity="0.05"/>
 
   <!-- Definitions -->
   <defs>
+    <!-- Clip to icon shape -->
+    <clipPath id="icon_clip">
+      <rect width="1024" height="1024" rx="228"/>
+    </clipPath>
     <!-- Background Gradient: Deep coding environment -->
     <linearGradient id="bg_gradient" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
       <stop offset="0%" stop-color="#1b2028"/>
