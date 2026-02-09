@@ -2,12 +2,15 @@ use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     ffi::CString,
+    fs,
     os::raw::{c_char, c_void},
     ptr::{self, NonNull},
+    process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
         OnceLock,
     },
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
@@ -544,7 +547,66 @@ impl GhosttyInstance {
     }
 
     fn screenshot(&mut self) -> Result<Vec<u8>, String> {
-        Err("Ghostty screenshot capture is not available".to_string())
+        let bounds = self.view.bounds();
+        if bounds.size.width <= 0.0 || bounds.size.height <= 0.0 {
+            return Err("Ghostty view has zero size".to_string());
+        }
+
+        unsafe {
+            // Ensure the backing surface has drawn the latest frame before capture.
+            ghostty_app_tick(self.ghostty_app);
+            ghostty_surface_draw(self.ghostty_surface);
+        }
+
+        let window = self
+            .view
+            .window()
+            .ok_or_else(|| "Ghostty view has no window for capture".to_string())?;
+        let screen = window
+            .screen()
+            .ok_or_else(|| "Ghostty window has no screen for capture".to_string())?;
+
+        let window_rect = self.view.convertRect_toView(bounds, None);
+        let screen_rect = window.convertRectToScreen(window_rect);
+        let screen_frame = screen.frame();
+
+        // `screencapture -R` expects top-left based coordinates in points.
+        let x = screen_rect.origin.x.round() as i64;
+        let y = (screen_frame.origin.y + screen_frame.size.height
+            - (screen_rect.origin.y + screen_rect.size.height))
+            .round() as i64;
+        let width = screen_rect.size.width.round() as i64;
+        let height = screen_rect.size.height.round() as i64;
+
+        if width <= 0 || height <= 0 {
+            return Err("Ghostty capture rectangle resolved to zero size".to_string());
+        }
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| format!("System clock error while capturing Ghostty: {e}"))?;
+        let tmp_path = std::env::temp_dir().join(format!("neoai-ghostty-{}.png", now.as_nanos()));
+        let rect_arg = format!("{x},{y},{width},{height}");
+
+        let output = Command::new("screencapture")
+            .arg("-x")
+            .arg("-R")
+            .arg(&rect_arg)
+            .arg(&tmp_path)
+            .output()
+            .map_err(|e| format!("Failed to run screencapture for Ghostty: {e}"))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "screencapture failed for Ghostty rect '{rect_arg}': {}",
+                stderr.trim()
+            ));
+        }
+
+        let png = fs::read(&tmp_path)
+            .map_err(|e| format!("Failed to read Ghostty capture '{}': {e}", tmp_path.display()))?;
+        let _ = fs::remove_file(&tmp_path);
+        Ok(png)
     }
 
     fn handle_key(&mut self, event: &NSEvent, action: ghostty_input_action_e) {
