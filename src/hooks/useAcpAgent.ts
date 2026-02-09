@@ -4,6 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AcpEvent,
   AcpInstallStatus,
+  AcpPromptBlock,
   AcpPermissionRequest,
   AgentStatus,
 } from "../types/acp";
@@ -113,12 +114,11 @@ export function useAcpAgent() {
   }, []);
 
   const sendPrompt = useCallback(
-    async (messages: string[], context?: string) => {
+    async (blocks: AcpPromptBlock[]) => {
       if (!sessionId) throw new Error("No active session");
       return invoke<string>("acp_send_prompt", {
         sessionId,
-        messages,
-        context: context ?? null,
+        blocks,
       });
     },
     [sessionId]

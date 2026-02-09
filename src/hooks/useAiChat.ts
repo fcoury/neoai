@@ -3,8 +3,8 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import type { NvimBridgeApi } from "./useNvimBridge";
 import { useAcpAgent } from "./useAcpAgent";
-import type { ChatMessage } from "../types/ai-chat";
-import type { AcpEvent } from "../types/acp";
+import type { ChatAttachment, ChatMessage } from "../types/ai-chat";
+import type { AcpEvent, AcpPromptBlock } from "../types/acp";
 import type {
   NvimAction,
   NvimActionEvent,
@@ -18,6 +18,20 @@ function nextMessageId(): string {
 
 const MAX_PERSISTED_MESSAGES = 200;
 const MAX_TRACE_EVENTS = 80;
+const MAX_ATTACHMENTS_PER_MESSAGE = 4;
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const MAX_TOTAL_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const ALLOWED_IMAGE_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+]);
+
+export interface SendMessageInput {
+  content: string;
+  attachments?: ChatAttachment[];
+}
 
 export interface AiTraceEvent {
   id: string;
@@ -35,7 +49,7 @@ export interface AiChatController {
     content: string,
     kind?: "action-summary" | "status-note"
   ) => void;
-  sendMessage: (content: string) => Promise<void>;
+  sendMessage: (input: SendMessageInput) => Promise<void>;
   applyProposedEdits: (messageId: string) => Promise<void>;
   rejectProposedEdits: (messageId: string) => void;
   clearMessages: () => void;
@@ -272,19 +286,31 @@ export function useAiChat(terminalId: string | null, nvim: NvimBridgeApi): AiCha
   }, [acp, nvim, trace]);
 
   const sendMessage = useCallback(
-    async (content: string) => {
-      if (!content.trim() || isStreaming) return;
-      trace("chat.sendMessage", `chars=${content.length}`);
+    async ({ content, attachments = [] }: SendMessageInput) => {
+      const trimmedContent = content.trim();
+      if (isStreaming) return;
+      if (!trimmedContent && attachments.length === 0) return;
+
+      const validationError = validateImageAttachments(attachments);
+      if (validationError) {
+        appendSystemMessage(validationError, "status-note");
+        return;
+      }
+      trace(
+        "chat.sendMessage",
+        `chars=${trimmedContent.length}, attachments=${attachments.length}`
+      );
 
       // Add user message
       const userMsg: ChatMessage = {
         id: nextMessageId(),
         role: "user",
-        content,
+        content: trimmedContent,
         timestamp: Date.now(),
         context: nvim.context ?? undefined,
         diagnostics:
           nvim.diagnostics.length > 0 ? nvim.diagnostics : undefined,
+        attachments: attachments.length > 0 ? attachments : undefined,
       };
       setMessages((prev) => [...prev, userMsg]);
 
@@ -326,7 +352,22 @@ export function useAiChat(terminalId: string | null, nvim: NvimBridgeApi): AiCha
 
       try {
         trace("agent.prompt.start");
-        await acp.sendPrompt([content], contextStr);
+        const blocks: AcpPromptBlock[] = [];
+        if (contextStr) {
+          blocks.push({ type: "text", text: contextStr });
+        }
+        if (trimmedContent) {
+          blocks.push({ type: "text", text: trimmedContent });
+        }
+        for (const attachment of attachments) {
+          blocks.push({
+            type: "image",
+            mimeType: attachment.mimeType,
+            dataBase64: attachment.dataBase64,
+          });
+        }
+
+        await acp.sendPrompt(blocks);
         trace("agent.prompt.sent");
       } catch (e) {
         trace("agent.prompt.error", String(e));
@@ -341,7 +382,7 @@ export function useAiChat(terminalId: string | null, nvim: NvimBridgeApi): AiCha
         currentAssistantIdRef.current = null;
       }
     },
-    [isStreaming, nvim.context, nvim.diagnostics, acp, trace]
+    [isStreaming, nvim.context, nvim.diagnostics, acp, trace, appendSystemMessage]
   );
 
   // Listen for nvim-action events from Neovim keybindings
@@ -363,7 +404,7 @@ export function useAiChat(terminalId: string | null, nvim: NvimBridgeApi): AiCha
       actionTriggeredRef.current = true;
       const prompt = buildActionPrompt(action);
       trace("nvim.action.forwarded", action.action);
-      void sendMessage(prompt);
+      void sendMessage({ content: prompt });
     });
 
     return () => {
@@ -469,6 +510,28 @@ function severityLabel(severity: number): string {
     default:
       return "UNKNOWN";
   }
+}
+
+function validateImageAttachments(attachments: ChatAttachment[]): string | null {
+  if (attachments.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+    return `You can attach up to ${MAX_ATTACHMENTS_PER_MESSAGE} images per message.`;
+  }
+
+  let totalSize = 0;
+  for (const attachment of attachments) {
+    if (!ALLOWED_IMAGE_MIME_TYPES.has(attachment.mimeType)) {
+      return `Unsupported image type: ${attachment.mimeType}.`;
+    }
+    if (attachment.sizeBytes > MAX_ATTACHMENT_BYTES) {
+      return `Image "${attachment.name ?? attachment.id}" exceeds 5MB.`;
+    }
+    totalSize += attachment.sizeBytes;
+  }
+
+  if (totalSize > MAX_TOTAL_ATTACHMENT_BYTES) {
+    return "Total image attachments exceed 20MB for a single message.";
+  }
+  return null;
 }
 
 function buildActionPrompt(action: NvimAction): string {

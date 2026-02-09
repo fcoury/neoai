@@ -43,6 +43,7 @@ pub struct DbChatMessage {
     pub system_kind: Option<String>,
     pub context: Option<serde_json::Value>,
     pub diagnostics: Option<serde_json::Value>,
+    pub attachments: Option<serde_json::Value>,
     pub proposed_edits: Option<serde_json::Value>,
     pub edit_status: Option<String>,
 }
@@ -134,6 +135,7 @@ impl Database {
               system_kind TEXT,
               context_json TEXT,
               diagnostics_json TEXT,
+              attachments_json TEXT,
               proposed_edits_json TEXT,
               edit_status TEXT
             );
@@ -150,7 +152,30 @@ impl Database {
         )
         .map_err(|e| format!("Failed to initialize sqlite schema: {e}"))?;
 
+        Self::ensure_chat_messages_schema(&conn)?;
+
         Ok(Self { conn })
+    }
+
+    fn ensure_chat_messages_schema(conn: &Connection) -> Result<(), String> {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(chat_messages)")
+            .map_err(|e| format!("Failed to inspect chat_messages schema: {e}"))?;
+        let columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| format!("Failed to query chat_messages columns: {e}"))?
+            .collect::<Result<HashSet<_>, _>>()
+            .map_err(|e| format!("Failed to parse chat_messages columns: {e}"))?;
+
+        if !columns.contains("attachments_json") {
+            conn.execute(
+                "ALTER TABLE chat_messages ADD COLUMN attachments_json TEXT",
+                [],
+            )
+            .map_err(|e| format!("Failed to add attachments_json column: {e}"))?;
+        }
+
+        Ok(())
     }
 
     fn parse_project_row(row: &Row<'_>) -> Result<DbProject, rusqlite::Error> {
@@ -189,8 +214,9 @@ impl Database {
             system_kind: row.get(4)?,
             context: parse_json(row.get(5)?),
             diagnostics: parse_json(row.get(6)?),
-            proposed_edits: parse_json(row.get(7)?),
-            edit_status: row.get(8)?,
+            attachments: parse_json(row.get(7)?),
+            proposed_edits: parse_json(row.get(8)?),
+            edit_status: row.get(9)?,
         })
     }
 
@@ -277,13 +303,14 @@ impl Database {
     ) -> Result<(), String> {
         let context_json = Self::to_json_string(&message.context)?;
         let diagnostics_json = Self::to_json_string(&message.diagnostics)?;
+        let attachments_json = Self::to_json_string(&message.attachments)?;
         let proposed_edits_json = Self::to_json_string(&message.proposed_edits)?;
 
         tx.execute(
             r#"
             INSERT OR REPLACE INTO chat_messages (
-              id, folder_id, role, content, timestamp, system_kind, context_json, diagnostics_json, proposed_edits_json, edit_status
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+              id, folder_id, role, content, timestamp, system_kind, context_json, diagnostics_json, attachments_json, proposed_edits_json, edit_status
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             "#,
             params![
                 message.id,
@@ -294,6 +321,7 @@ impl Database {
                 message.system_kind,
                 context_json,
                 diagnostics_json,
+                attachments_json,
                 proposed_edits_json,
                 message.edit_status,
             ],
@@ -526,7 +554,7 @@ pub fn db_load_messages(
         .conn
         .prepare(
             r#"
-            SELECT id, role, content, timestamp, system_kind, context_json, diagnostics_json, proposed_edits_json, edit_status
+            SELECT id, role, content, timestamp, system_kind, context_json, diagnostics_json, attachments_json, proposed_edits_json, edit_status
             FROM chat_messages
             WHERE folder_id = ?1
             ORDER BY timestamp ASC

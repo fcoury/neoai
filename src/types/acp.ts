@@ -6,6 +6,10 @@ export type AcpEvent =
   | { type: "done"; data: { stopReason: string } }
   | { type: "error"; data: string };
 
+export type AcpPromptBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; mimeType: string; dataBase64: string };
+
 export type AgentStatus = "Stopped" | "Starting" | "Running" | { Error: string };
 
 export type AcpInstallPhase =

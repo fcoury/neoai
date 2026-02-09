@@ -99,6 +99,20 @@ pub struct AcpPermissionRequestEvent {
     pub options: Vec<AcpPermissionOption>,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum AcpPromptBlock {
+    Text {
+        text: String,
+    },
+    Image {
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+        #[serde(rename = "dataBase64")]
+        data_base64: String,
+    },
+}
+
 type PendingPermissionRequests =
     Arc<Mutex<std::collections::HashMap<String, oneshot::Sender<acp::RequestPermissionOutcome>>>>;
 type SessionTerminalBindings = Arc<Mutex<std::collections::HashMap<String, String>>>;
@@ -113,8 +127,7 @@ enum AcpCommand {
     },
     Prompt {
         session_id: String,
-        messages: Vec<String>,
-        context: Option<String>,
+        blocks: Vec<AcpPromptBlock>,
         reply: oneshot::Sender<Result<String, String>>,
     },
     Shutdown,
@@ -1098,16 +1111,24 @@ async fn acp_worker(
                     }
                     AcpCommand::Prompt {
                         session_id,
-                        messages,
-                        context,
+                        blocks,
                         reply,
                     } => {
                         let mut prompt_blocks: Vec<acp::ContentBlock> = Vec::new();
-                        if let Some(ctx) = context {
-                            prompt_blocks.push(ctx.into());
-                        }
-                        for msg in messages {
-                            prompt_blocks.push(msg.into());
+                        for block in blocks {
+                            match block {
+                                AcpPromptBlock::Text { text } => {
+                                    prompt_blocks.push(text.into());
+                                }
+                                AcpPromptBlock::Image {
+                                    mime_type,
+                                    data_base64,
+                                } => {
+                                    prompt_blocks.push(acp::ContentBlock::Image(
+                                        acp::ImageContent::new(data_base64, mime_type),
+                                    ));
+                                }
+                            }
                         }
 
                         let result = conn
@@ -1333,8 +1354,7 @@ pub async fn acp_send_prompt(
     state: tauri::State<'_, Mutex<AcpClientState>>,
     _app_handle: tauri::AppHandle,
     session_id: String,
-    messages: Vec<String>,
-    context: Option<String>,
+    blocks: Vec<AcpPromptBlock>,
 ) -> Result<String, String> {
     let tx = {
         let acp_state = state.lock().await;
@@ -1349,8 +1369,7 @@ pub async fn acp_send_prompt(
 
     tx.send(AcpCommand::Prompt {
         session_id,
-        messages,
-        context,
+        blocks,
         reply: reply_tx,
     })
     .await
